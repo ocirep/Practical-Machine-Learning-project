@@ -1,0 +1,90 @@
+---
+title: "Practical Machine Learning Project"
+author: "Julio J. Melero"
+date: "15 de diciembre de 2014"
+output: html_document
+---
+## Introduction
+The goal of this project is to use data from several sensors situated on the belt, forearm, arm, and dumbbell of 6 participants to quantify how well they are doing a particular activity. The used sensors ared 9 degrees of freedom Razor inertial measurement units (IMU), which provide three-axes acceleration, gyroscope and magnetometer data at a joint sampling rate of 45 Hz.
+The prediction will be accomplished by training a model on the registered data. I will use a random forest classifier algorimth for this project.
+
+I will use the Caret package for almost all the tasks to be peformed on the data, subsetting, training and cross-validation.
+
+```{r, error=FALSE}
+library(caret)
+```
+## Data loading and preprocessing
+First, I will load the training data and subset it into a training and a testing set. In this way, I will have a test set where I can estimate the performance of the model befor using it to classify the actual test set.
+
+```{r}
+# Global training data
+setwd("~/Dropbox/MachineLearning/Course project")
+training_data <- read.table("pml-training.csv", header = TRUE, sep = ",",na.strings=c("",".","NA"))
+# The first 7 columns are useless for our project
+training_data1 <- training_data[, -seq(from = 1, to = 7, by = 1)]
+# seed random number
+set.seed(987654)
+# test subset: 40% of training data
+test_num_data <- createDataPartition(y = training_data1$classe, p = 0.4, list = F)
+test_data <- training_data1[test_num_data, ]
+# training subset: 60% of training data
+train_data <- training_data1[-test_num_data, ]
+```
+There are 11772 observables and 160 variables in the original file. Many of the variables have observations for only few data points. These variables become useless as they do not contain information for classifying most of the data points. Then, it looks reasonable to discard these variables. I will only use variables with at least 95% of the observations filled in.
+```{r}
+# function to determine percentage of variable filling
+filled_pct <- function(x) {
+    n <- length(x)
+    nas <- sum(is.na(x))
+    return(100*(n - nas)/n)
+}
+# Calculate variable percentage filling
+var_pct_fill<-apply(train_data, 2, filled_pct)
+# Remove variables not filled at least 95% of observations
+final_train_data <- train_data[, var_pct_fill > 95]
+final_test_data<-test_data[,var_pct_fill>95]
+```
+## Prediction algorithm
+The prediction algorithm has to be selected according to the stated problem. After filtering the data and discarding meaningless variables, there remain 52 variables to fit the model. Moreover, possible relations and interactions betweeen variables are unknown. With this conditions, one of the best possible models are Random Forests (RF). They are very well suited to handle a big number of variables. Besides that, RF can be used to estimate variable importance allowing to discard some of the inputs in the model. Cross-validation and probability outputs for classification are other important properties of RF.
+
+## Cross-validation and determination of the inputs of the algorithm
+Using RF, cross-validation is performed inside the algorithm. Nevertheless, 40% of the training data are reserved for cross-validation of the predictions of the model. On the other hand, variable importance can be used for feature selection and then, reducing CPU time. There are too many possible features for being used in the model. Then, in order to reduce their number, variable importance will be checked and only features with importance bigger than 50 % will be used for the final algorithm. Here the only used criterium was to reduce the number of features. A more detailed study shoud be performed in order to optimize the model.
+
+```{r, cache=TRUE}
+var_imp_number<-createDataPartition(y = final_train_data$classe, p = 0.2, list = F)
+var_imp_data<-final_train_data[var_imp_number,]
+imp_model <- train(classe ~ ., data = var_imp_data, method = "rf")
+var_imp<-varImp(imp_model)
+plot(var_imp,main = "Variable Importance of the 52 analyzed features")
+imp_level <- quantile(var_imp$importance[, 1], 0.50)
+imp_filter <- var_imp$importance[, 1] >= imp_level
+reduced_final_train_data<- final_train_data[, imp_filter]
+rfModel <- train(classe ~ ., data = reduced_final_train_data, method = "rf",trControl=trainControl(method='cv'), number=5, allowParallel=TRUE)
+```
+## Results
+Once the model is fitted, cross-validation is performed with the testing dataset. Confusion matrix is used for getting all the relevant information. 
+```{r}
+prediction <- predict(rfModel, final_test_data)
+mt<-confusionMatrix(prediction,final_test_data$classe)
+mt
+```
+Unbiased estimate of the random forest's out-of-sample error rate is `r round(100*(1-mt$overall[1]),2)` %.
+
+## Prediction with the real test data
+Here, the model is applied to the real test data and the proposed function is used to generate the needed text files.
+```{r}
+testing_data <- read.table("pml-testing.csv", header = TRUE, sep = ",",na.strings=c("",".","NA"))
+answers <- predict(rfModel,testing_data)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+
+```
+
